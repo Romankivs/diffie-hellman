@@ -5,7 +5,9 @@ use std::thread;
 mod mod_exp;
 use mod_exp::mod_exp;
 
-const P: u64 = 23;
+const PARTICIPANTS_NAMES: [&str; 8] = ["A", "B", "C", "D", "E", "F", "G", "H"];
+
+const P: u64 = 3083;
 const G: u64 = 5;
 
 #[derive(Debug)]
@@ -31,7 +33,7 @@ impl Participant {
 
         for msg in &self.command_receiver {
             match msg {
-                Command::ReceiveIntermediate { key } => {
+                Command::Exponentiate { key } => {
                     let updated_intermediate = self.compute_exp(key);
                     let answer = CommandAnswer::UpdatedIntermediate {
                         key: updated_intermediate,
@@ -47,6 +49,7 @@ impl Participant {
                         .send(answer)
                         .expect("Failed to send the answer back to coordinator");
                 }
+                Command::ReceiveIntermediate { key } => {}
                 Command::ReceiveFinal { key } => {
                     self.shared_secret = Some(self.compute_exp(key));
 
@@ -63,6 +66,7 @@ impl Participant {
 
 #[derive(Debug)]
 enum Command {
+    Exponentiate { key: u64 },
     ReceiveIntermediate { key: u64 },
     ReceiveFinal { key: u64 },
 }
@@ -78,6 +82,76 @@ struct ParticipantInfo {
     sender: Sender<Command>,
 }
 
+fn print_names(prefix: &str, participants: &[ParticipantInfo]) {
+    print!("{} ", prefix);
+    participants.iter().for_each(|participant| {
+        print!("{} ", participant.name.as_str());
+    });
+    print!("\n");
+}
+
+fn split_into_groups(
+    participants: &[ParticipantInfo],
+    receiver: &Receiver<CommandAnswer>,
+    intermediate_key: u64,
+) {
+    if participants.len() < 2 {
+        panic!("Participant length is too small to be split into groups!");
+    }
+
+    let mid = participants.len() / 2;
+
+    let first_half = &participants[..mid];
+    let second_half = &participants[mid..];
+
+    print_names("First half names:", first_half);
+    print_names("Second half names:", second_half);
+
+    let mut first_intermediate_key = intermediate_key;
+    for participant in first_half {
+        let cmd = Command::Exponentiate {
+            key: first_intermediate_key,
+        };
+        participant.sender.send(cmd).unwrap();
+
+        let answer = receiver.recv().unwrap();
+        first_intermediate_key = match answer {
+            CommandAnswer::UpdatedIntermediate { key } => key,
+        };
+    }
+
+    let mut second_intermediate_key = intermediate_key;
+    for participant in second_half {
+        let cmd = Command::Exponentiate {
+            key: second_intermediate_key,
+        };
+        participant.sender.send(cmd).unwrap();
+
+        let answer = receiver.recv().unwrap();
+        second_intermediate_key = match answer {
+            CommandAnswer::UpdatedIntermediate { key } => key,
+        };
+    }
+
+    if first_half.len() == 1 {
+        let cmd = Command::ReceiveFinal {
+            key: second_intermediate_key,
+        };
+        first_half[0].sender.send(cmd).unwrap();
+    } else {
+        split_into_groups(first_half, receiver, second_intermediate_key);
+    }
+
+    if second_half.len() == 1 {
+        let cmd = Command::ReceiveFinal {
+            key: first_intermediate_key,
+        };
+        second_half[0].sender.send(cmd).unwrap();
+    } else {
+        split_into_groups(second_half, receiver, first_intermediate_key);
+    }
+}
+
 fn setup_participants() -> Vec<ParticipantInfo> {
     let mut participants = Vec::new();
 
@@ -85,7 +159,7 @@ fn setup_participants() -> Vec<ParticipantInfo> {
 
     let (coordinator_sender, coordinator_receive) = channel::<CommandAnswer>();
 
-    for name in ["A", "B", "C", "D", "E", "F", "G", "H"].iter() {
+    for name in PARTICIPANTS_NAMES.iter() {
         let (tx, rx) = channel::<Command>();
 
         let private_key = rng.random_range(2..P);
@@ -105,49 +179,29 @@ fn setup_participants() -> Vec<ParticipantInfo> {
         });
     }
 
-    loop {
-        let mid = participants.len() / 2;
-        let first_half = &participants[..mid];
-        let second_half = &participants[mid..];
+    split_into_groups(&participants, &coordinator_receive, G);
 
-        print!("First half names: ");
-        first_half.iter().for_each(|participant| {
-            print!("{} ", participant.name.as_str());
-        });
-        print!("\n");
+    println!("Finished!!!");
 
-        print!("Second half names: ");
-        second_half.iter().for_each(|participant| {
-            print!("{} ", participant.name.as_str());
-        });
-        print!("\n");
-
-        for participant in first_half {
-
-        }
-
-        break;
-    }
-
-    for participant in &participants {
-        let cmd = Command::ReceiveIntermediate { key: G };
-        participant.sender.send(cmd).unwrap();
-
-        let answer = coordinator_receive.recv().unwrap();
-        println!("Received first answer: {:?}", &answer);
-
-        let key = match answer {
-            CommandAnswer::UpdatedIntermediate { key } => key,
-        };
-        let cmd = Command::ReceiveFinal { key };
-        participant.sender.send(cmd).expect(
-            format!(
-                "Failed to send command message to participant {}",
-                participant.name.as_str()
-            )
-            .as_str(),
-        );
-    }
+    //for participant in &participants {
+    //    let cmd = Command::Exponentiate { key: G };
+    //    participant.sender.send(cmd).unwrap();
+    //
+    //    let answer = coordinator_receive.recv().unwrap();
+    //    println!("Received first answer: {:?}", &answer);
+    //
+    //    let key = match answer {
+    //        CommandAnswer::UpdatedIntermediate { key } => key,
+    //    };
+    //    let cmd = Command::ReceiveFinal { key };
+    //    participant.sender.send(cmd).expect(
+    //        format!(
+    //            "Failed to send command message to participant {}",
+    //            participant.name.as_str()
+    //        )
+    //        .as_str(),
+    //    );
+    //}
 
     participants
 }
