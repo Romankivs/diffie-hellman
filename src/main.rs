@@ -40,24 +40,30 @@ impl Participant {
                     };
 
                     println!(
-                        "Participant \"{}\" answer with update intermediate key {}",
+                        "Participant \"{}\" answer with update intermediate key {} after receiving intermediate key {}",
                         self.name.as_str(),
                         updated_intermediate,
+                        key
                     );
 
                     self.answer_sender
                         .send(answer)
                         .expect("Failed to send the answer back to coordinator");
                 }
-                Command::ReceiveIntermediate { key } => {}
                 Command::ReceiveFinal { key } => {
                     self.shared_secret = Some(self.compute_exp(key));
 
                     println!(
-                        "Participant \"{}\" determined shared secret key to be {}",
+                        "Participant \"{}\" determined shared secret key to be {} after receiving intermediate key {}",
                         self.name.as_str(),
                         self.shared_secret.unwrap(),
+                        key
                     );
+
+                    let answer = CommandAnswer::UpdatedFinal;
+                    self.answer_sender
+                        .send(answer)
+                        .expect("Failed to send final answer back to coordinator");
                 }
             }
         }
@@ -67,13 +73,13 @@ impl Participant {
 #[derive(Debug)]
 enum Command {
     Exponentiate { key: u64 },
-    ReceiveIntermediate { key: u64 },
     ReceiveFinal { key: u64 },
 }
 
 #[derive(Debug)]
 enum CommandAnswer {
     UpdatedIntermediate { key: u64 },
+    UpdatedFinal,
 }
 
 #[derive(Debug)]
@@ -88,6 +94,27 @@ fn print_names(prefix: &str, participants: &[ParticipantInfo]) {
         print!("{} ", participant.name.as_str());
     });
     print!("\n");
+}
+
+fn accumulate_intermediate_key(
+    participants: &[ParticipantInfo],
+    receiver: &Receiver<CommandAnswer>,
+    intermediate_key: u64,
+) -> u64 {
+    participants.iter().fold(intermediate_key, |acc_key, participant| {
+        let cmd = Command::Exponentiate {
+            key: acc_key,
+        };
+        participant.sender.send(cmd).unwrap();
+
+        let answer = receiver.recv().unwrap();
+        match answer {
+            CommandAnswer::UpdatedIntermediate { key } => key,
+            CommandAnswer::UpdatedFinal => {
+                panic!("Shouldn't have yet received final intermediate key")
+            }
+        }
+    })
 }
 
 fn split_into_groups(
@@ -107,56 +134,43 @@ fn split_into_groups(
     print_names("First half names:", first_half);
     print_names("Second half names:", second_half);
 
-    let mut first_intermediate_key = intermediate_key;
-    for participant in first_half {
-        let cmd = Command::Exponentiate {
-            key: first_intermediate_key,
-        };
-        participant.sender.send(cmd).unwrap();
-
-        let answer = receiver.recv().unwrap();
-        first_intermediate_key = match answer {
-            CommandAnswer::UpdatedIntermediate { key } => key,
-        };
-    }
-
-    let mut second_intermediate_key = intermediate_key;
-    for participant in second_half {
-        let cmd = Command::Exponentiate {
-            key: second_intermediate_key,
-        };
-        participant.sender.send(cmd).unwrap();
-
-        let answer = receiver.recv().unwrap();
-        second_intermediate_key = match answer {
-            CommandAnswer::UpdatedIntermediate { key } => key,
-        };
-    }
+    let first_accumulated_key = accumulate_intermediate_key(first_half, receiver, intermediate_key);
+    let second_accumulated_key = accumulate_intermediate_key(second_half, receiver, intermediate_key);
 
     if first_half.len() == 1 {
         let cmd = Command::ReceiveFinal {
-            key: second_intermediate_key,
+            key: second_accumulated_key,
         };
         first_half[0].sender.send(cmd).unwrap();
+
+        let answer = receiver.recv().unwrap();
+        match answer {
+            CommandAnswer::UpdatedIntermediate { key: _ } => panic!("Should have received final!"),
+            CommandAnswer::UpdatedFinal => (),
+        };
     } else {
-        split_into_groups(first_half, receiver, second_intermediate_key);
+        split_into_groups(first_half, receiver, second_accumulated_key);
     }
 
     if second_half.len() == 1 {
         let cmd = Command::ReceiveFinal {
-            key: first_intermediate_key,
+            key: first_accumulated_key,
         };
         second_half[0].sender.send(cmd).unwrap();
+
+        let answer = receiver.recv().unwrap();
+        match answer {
+            CommandAnswer::UpdatedIntermediate { key: _ } => panic!("Should have received final!"),
+            CommandAnswer::UpdatedFinal => (),
+        };
     } else {
-        split_into_groups(second_half, receiver, first_intermediate_key);
+        split_into_groups(second_half, receiver, first_accumulated_key);
     }
 }
 
 fn setup_participants() -> Vec<ParticipantInfo> {
     let mut participants = Vec::new();
-
     let mut rng = rand::rng();
-
     let (coordinator_sender, coordinator_receive) = channel::<CommandAnswer>();
 
     for name in PARTICIPANTS_NAMES.iter() {
@@ -182,26 +196,6 @@ fn setup_participants() -> Vec<ParticipantInfo> {
     split_into_groups(&participants, &coordinator_receive, G);
 
     println!("Finished!!!");
-
-    //for participant in &participants {
-    //    let cmd = Command::Exponentiate { key: G };
-    //    participant.sender.send(cmd).unwrap();
-    //
-    //    let answer = coordinator_receive.recv().unwrap();
-    //    println!("Received first answer: {:?}", &answer);
-    //
-    //    let key = match answer {
-    //        CommandAnswer::UpdatedIntermediate { key } => key,
-    //    };
-    //    let cmd = Command::ReceiveFinal { key };
-    //    participant.sender.send(cmd).expect(
-    //        format!(
-    //            "Failed to send command message to participant {}",
-    //            participant.name.as_str()
-    //        )
-    //        .as_str(),
-    //    );
-    //}
 
     participants
 }
