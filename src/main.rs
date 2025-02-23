@@ -38,7 +38,7 @@ enum CommandAnswer {
 }
 
 impl Participant {
-    pub fn compute_exp(&self, intermediate_secret: u64) -> u64 {
+    fn compute_exp(&self, intermediate_secret: u64) -> u64 {
         mod_exp::mod_exp(intermediate_secret, self.private_key, P)
     }
 
