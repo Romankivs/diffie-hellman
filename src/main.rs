@@ -43,12 +43,6 @@ impl Participant {
     }
 
     pub fn run(mut self) {
-        println!(
-            "Running participant {} with private key {}",
-            self.name.as_str(),
-            self.private_key
-        );
-
         for msg in &self.command_receiver {
             match msg {
                 Command::Exponentiate { key } => {
@@ -197,7 +191,7 @@ impl Coordinator {
         let (first_half, second_half) = participants.split_at(mid);
 
         println!("First half names: {:?}", first_half);
-        println!("Second half names: {:?}", first_half);
+        println!("Second half names: {:?}", second_half);
 
         let first_accumulated_key = self.accumulate_intermediate_key(first_half, intermediate_key);
         let second_accumulated_key =
